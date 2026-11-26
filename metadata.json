@@ -1,0 +1,6 @@
+{
+  "name": "ZARTHOUGHTS QURAN ACADEMY",
+  "description": "Learn Quran. Understand Islam. Build a Better Future. Complete digital Holy Quran reader, Tajweed & Hifz courses, live classes, Islamic library, and multi-role academy portal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

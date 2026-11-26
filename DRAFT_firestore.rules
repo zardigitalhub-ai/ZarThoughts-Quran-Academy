@@ -1,0 +1,525 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isBootstrapAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'zardigitalhub@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrapAdmin() ||
+        (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isApprovedTeacher() {
+      return isVerifiedUser() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher' &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.teacherApproved == true;
+    }
+
+    // --- Validation Blueprints ---
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll([
+          'uid', 'email', 'displayName', 'role', 'isMinor',
+          'parentalConsentStatus', 'teacherApproved', 'emailVerified',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'photoURL', 'role', 'isMinor',
+          'guardianEmail', 'guardianUid', 'parentalConsentStatus',
+          'teacherApproved', 'teacherSpecialty', 'teacherBio',
+          'phone', 'bio', 'emailVerified', 'createdAt', 'updatedAt'
+        ]) &&
+        data.uid is string && data.uid == userId &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120 &&
+        (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500)) &&
+        data.role in ['student', 'parent', 'teacher', 'super_admin'] &&
+        data.isMinor is bool &&
+        (!('guardianEmail' in data) || (data.guardianEmail is string && data.guardianEmail.size() <= 254)) &&
+        (!('guardianUid' in data) || (data.guardianUid is string && data.guardianUid.size() <= 128)) &&
+        data.parentalConsentStatus in ['not_required', 'pending', 'approved'] &&
+        data.teacherApproved is bool &&
+        (!('teacherSpecialty' in data) || (data.teacherSpecialty is string && data.teacherSpecialty.size() <= 200)) &&
+        (!('teacherBio' in data) || (data.teacherBio is string && data.teacherBio.size() <= 1000)) &&
+        (!('phone' in data) || (data.phone is string && data.phone.size() <= 40)) &&
+        (!('bio' in data) || (data.bio is string && data.bio.size() <= 600)) &&
+        data.emailVerified is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRecord(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'grantedBy', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'grantedBy', 'createdAt']) &&
+        data.uid is string && data.uid == userId &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.grantedBy is string && data.grantedBy.size() >= 1 && data.grantedBy.size() <= 128 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidPublicTeacher(data, teacherId) {
+      return data.keys().hasAll(['teacherId', 'displayName', 'specialty', 'approved', 'updatedAt']) &&
+        data.keys().hasOnly(['teacherId', 'displayName', 'photoURL', 'specialty', 'bio', 'languages', 'approved', 'updatedAt']) &&
+        data.teacherId is string && data.teacherId == teacherId &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120 &&
+        (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500)) &&
+        data.specialty is string && data.specialty.size() >= 2 && data.specialty.size() <= 200 &&
+        (!('bio' in data) || (data.bio is string && data.bio.size() <= 1000)) &&
+        (!('languages' in data) || (data.languages is string && data.languages.size() <= 160)) &&
+        data.approved is bool &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCourse(data) {
+      return data.keys().hasAll(['title', 'category', 'level', 'description', 'durationWeeks', 'teacherId', 'teacherName', 'published', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['title', 'category', 'level', 'description', 'durationWeeks', 'scheduleSummary', 'teacherId', 'teacherName', 'imageUrl', 'published', 'createdAt', 'updatedAt']) &&
+        data.title is string && data.title.size() >= 3 && data.title.size() <= 160 &&
+        data.category in ['Tajweed', 'Hifz', 'Nazra', 'Tafseer', 'Islamic Studies', 'Kids Quran'] &&
+        data.level in ['Beginner', 'Intermediate', 'Advanced'] &&
+        data.description is string && data.description.size() >= 10 && data.description.size() <= 1200 &&
+        data.durationWeeks is number && data.durationWeeks >= 1 && data.durationWeeks <= 260 &&
+        (!('scheduleSummary' in data) || (data.scheduleSummary is string && data.scheduleSummary.size() <= 160)) &&
+        isValidId(data.teacherId) &&
+        data.teacherName is string && data.teacherName.size() >= 1 && data.teacherName.size() <= 120 &&
+        (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 500)) &&
+        data.published is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidEnrollment(data) {
+      return data.keys().hasAll(['studentId', 'studentName', 'courseId', 'courseTitle', 'status', 'progressPercent', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['studentId', 'studentName', 'courseId', 'courseTitle', 'guardianId', 'status', 'progressPercent', 'lastSurah', 'lastAyah', 'createdAt', 'updatedAt']) &&
+        isValidId(data.studentId) &&
+        data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 120 &&
+        isValidId(data.courseId) &&
+        data.courseTitle is string && data.courseTitle.size() >= 1 && data.courseTitle.size() <= 160 &&
+        (!('guardianId' in data) || (data.guardianId is string && data.guardianId.size() <= 128)) &&
+        data.status in ['active', 'completed', 'paused'] &&
+        data.progressPercent is number && data.progressPercent >= 0 && data.progressPercent <= 100 &&
+        (!('lastSurah' in data) || (data.lastSurah is number && data.lastSurah >= 1 && data.lastSurah <= 114)) &&
+        (!('lastAyah' in data) || (data.lastAyah is number && data.lastAyah >= 1 && data.lastAyah <= 286)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidLiveClass(data) {
+      return data.keys().hasAll(['title', 'teacherId', 'teacherName', 'scheduledFor', 'durationMinutes', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['title', 'courseId', 'teacherId', 'teacherName', 'scheduledFor', 'durationMinutes', 'meetingUrl', 'topic', 'status', 'createdAt', 'updatedAt']) &&
+        data.title is string && data.title.size() >= 3 && data.title.size() <= 160 &&
+        (!('courseId' in data) || (data.courseId is string && data.courseId.size() <= 128)) &&
+        isValidId(data.teacherId) &&
+        data.teacherName is string && data.teacherName.size() >= 1 && data.teacherName.size() <= 120 &&
+        data.scheduledFor is string && data.scheduledFor.size() >= 4 && data.scheduledFor.size() <= 64 &&
+        data.durationMinutes is number && data.durationMinutes >= 10 && data.durationMinutes <= 300 &&
+        (!('meetingUrl' in data) || (data.meetingUrl is string && data.meetingUrl.size() <= 500)) &&
+        (!('topic' in data) || (data.topic is string && data.topic.size() <= 300)) &&
+        data.status in ['scheduled', 'live', 'completed'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidLibraryItem(data) {
+      return data.keys().hasAll(['title', 'author', 'category', 'language', 'description', 'published', 'createdBy', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['title', 'author', 'category', 'language', 'description', 'contentPreview', 'pages', 'published', 'createdBy', 'createdAt', 'updatedAt']) &&
+        data.title is string && data.title.size() >= 2 && data.title.size() <= 180 &&
+        data.author is string && data.author.size() >= 2 && data.author.size() <= 120 &&
+        data.category in ['Quran & Tajweed', 'Tafseer', 'Hadith', 'Seerah', 'Fiqh', 'Kids Stories'] &&
+        data.language in ['English', 'Urdu', 'Arabic'] &&
+        data.description is string && data.description.size() >= 5 && data.description.size() <= 1000 &&
+        (!('contentPreview' in data) || (data.contentPreview is string && data.contentPreview.size() <= 4000)) &&
+        (!('pages' in data) || (data.pages is number && data.pages >= 1 && data.pages <= 5000)) &&
+        data.published is bool &&
+        isValidId(data.createdBy) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidLecture(data) {
+      return data.keys().hasAll(['title', 'speaker', 'category', 'durationLabel', 'summary', 'published', 'createdBy', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['title', 'speaker', 'category', 'durationLabel', 'summary', 'mediaUrl', 'published', 'createdBy', 'createdAt', 'updatedAt']) &&
+        data.title is string && data.title.size() >= 3 && data.title.size() <= 180 &&
+        data.speaker is string && data.speaker.size() >= 2 && data.speaker.size() <= 120 &&
+        data.category is string && data.category.size() >= 2 && data.category.size() <= 80 &&
+        data.durationLabel is string && data.durationLabel.size() >= 2 && data.durationLabel.size() <= 30 &&
+        data.summary is string && data.summary.size() >= 5 && data.summary.size() <= 1200 &&
+        (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 500)) &&
+        data.published is bool &&
+        isValidId(data.createdBy) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidQuranProgress(data) {
+      return data.keys().hasAll(['userId', 'surahNumber', 'surahName', 'ayahNumber', 'juzNumber', 'pageNumber', 'isBookmark', 'updatedAt']) &&
+        data.keys().hasOnly(['userId', 'guardianId', 'surahNumber', 'surahName', 'ayahNumber', 'juzNumber', 'pageNumber', 'note', 'isBookmark', 'updatedAt']) &&
+        isValidId(data.userId) &&
+        (!('guardianId' in data) || (data.guardianId is string && data.guardianId.size() <= 128)) &&
+        data.surahNumber is number && data.surahNumber >= 1 && data.surahNumber <= 114 &&
+        data.surahName is string && data.surahName.size() >= 1 && data.surahName.size() <= 100 &&
+        data.ayahNumber is number && data.ayahNumber >= 1 && data.ayahNumber <= 286 &&
+        data.juzNumber is number && data.juzNumber >= 1 && data.juzNumber <= 30 &&
+        data.pageNumber is number && data.pageNumber >= 1 && data.pageNumber <= 604 &&
+        (!('note' in data) || (data.note is string && data.note.size() <= 1000)) &&
+        data.isBookmark is bool &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidGuardianLink(data) {
+      return data.keys().hasAll(['parentUid', 'parentEmail', 'childName', 'childAge', 'consentGranted', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['parentUid', 'parentEmail', 'childUid', 'childName', 'childAge', 'consentGranted', 'dailyLimitMinutes', 'notes', 'createdAt', 'updatedAt']) &&
+        isValidId(data.parentUid) &&
+        data.parentEmail is string && data.parentEmail.size() >= 3 && data.parentEmail.size() <= 254 &&
+        (!('childUid' in data) || (data.childUid is string && data.childUid.size() <= 128)) &&
+        data.childName is string && data.childName.size() >= 1 && data.childName.size() <= 120 &&
+        data.childAge is number && data.childAge >= 3 && data.childAge <= 17 &&
+        data.consentGranted is bool &&
+        (!('dailyLimitMinutes' in data) || (data.dailyLimitMinutes is number && data.dailyLimitMinutes >= 10 && data.dailyLimitMinutes <= 480)) &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 500)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidContactMessage(data) {
+      return data.keys().hasAll(['name', 'email', 'subject', 'message', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['name', 'email', 'subject', 'message', 'status', 'createdAt']) &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 120 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.subject is string && data.subject.size() >= 2 && data.subject.size() <= 160 &&
+        data.message is string && data.message.size() >= 5 && data.message.size() <= 2000 &&
+        data.status in ['new', 'reviewed'] &&
+        data.createdAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    // 1. Users (PII-isolated: owner or admin only)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+
+      allow create: if isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            incoming().role in ['student', 'parent', 'teacher'] &&
+            incoming().teacherApproved == false &&
+            (incoming().isMinor == false || incoming().parentalConsentStatus == 'pending')
+          ) ||
+          isBootstrapAdmin()
+        );
+
+      allow update: if isValidId(userId) &&
+        isSignedIn() &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            isOwner(userId) &&
+            incoming().role == existing().role &&
+            incoming().teacherApproved == existing().teacherApproved &&
+            incoming().parentalConsentStatus == existing().parentalConsentStatus &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'photoURL', 'phone', 'bio',
+              'teacherSpecialty', 'teacherBio', 'guardianEmail',
+              'emailVerified', 'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // 2. Admins (Trusted lookup collection)
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) &&
+        isValidAdminRecord(incoming(), userId) &&
+        incoming().createdAt == request.time &&
+        (isBootstrapAdmin() || isAdmin());
+      allow update: if false;
+      allow delete: if isValidId(userId) && isAdmin() && userId != request.auth.uid;
+    }
+
+    // 3. Public Teachers (Non-PII directory)
+    match /public_teachers/{teacherId} {
+      allow get: if isValidId(teacherId) && (existing().approved == true || isOwner(teacherId) || isAdmin());
+      allow list: if existing().approved == true || isAdmin();
+      allow create: if isValidId(teacherId) &&
+        isVerifiedUser() &&
+        isValidPublicTeacher(incoming(), teacherId) &&
+        incoming().updatedAt == request.time &&
+        isAdmin();
+      allow update: if isValidId(teacherId) &&
+        isVerifiedUser() &&
+        isValidPublicTeacher(incoming(), teacherId) &&
+        incoming().teacherId == existing().teacherId &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            isOwner(teacherId) &&
+            existing().approved == true &&
+            incoming().approved == existing().approved &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'specialty', 'bio', 'languages', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(teacherId) && isAdmin();
+    }
+
+    // 4. Courses
+    match /courses/{courseId} {
+      allow get: if isValidId(courseId) && (existing().published == true || isAdmin() || isApprovedTeacher());
+      allow list: if existing().published == true || isAdmin() || (isSignedIn() && existing().teacherId == request.auth.uid);
+      allow create: if isValidId(courseId) &&
+        isVerifiedUser() &&
+        isValidCourse(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (isAdmin() || (isApprovedTeacher() && incoming().teacherId == request.auth.uid));
+      allow update: if isValidId(courseId) &&
+        isVerifiedUser() &&
+        isValidCourse(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            isApprovedTeacher() &&
+            existing().teacherId == request.auth.uid &&
+            incoming().teacherId == existing().teacherId &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'category', 'level', 'description', 'durationWeeks', 'scheduleSummary', 'imageUrl', 'published', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(courseId) && isAdmin();
+    }
+
+    // 5. Enrollments
+    match /enrollments/{enrollmentId} {
+      allow get: if isValidId(enrollmentId) && isSignedIn() &&
+        (existing().studentId == request.auth.uid || existing().guardianId == request.auth.uid || isAdmin() || isApprovedTeacher());
+      allow list: if isSignedIn() &&
+        (existing().studentId == request.auth.uid || existing().guardianId == request.auth.uid || isAdmin());
+      allow create: if isValidId(enrollmentId) &&
+        isVerifiedUser() &&
+        isValidEnrollment(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/courses/$(incoming().courseId)) &&
+        (incoming().studentId == request.auth.uid || incoming().guardianId == request.auth.uid || isAdmin());
+      allow update: if isValidId(enrollmentId) &&
+        isVerifiedUser() &&
+        isValidEnrollment(incoming()) &&
+        incoming().studentId == existing().studentId &&
+        incoming().courseId == existing().courseId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            existing().status != 'completed' &&
+            (existing().studentId == request.auth.uid || existing().guardianId == request.auth.uid) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['progressPercent', 'lastSurah', 'lastAyah', 'status', 'updatedAt'])
+          ) ||
+          (
+            isApprovedTeacher() &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['progressPercent', 'lastSurah', 'lastAyah', 'status', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(enrollmentId) && isAdmin();
+    }
+
+    // 6. Live Classes
+    match /live_classes/{classId} {
+      allow get: if isValidId(classId) && (existing().status in ['scheduled', 'live', 'completed'] || isAdmin());
+      allow list: if existing().status in ['scheduled', 'live', 'completed'] || isAdmin();
+      allow create: if isValidId(classId) &&
+        isVerifiedUser() &&
+        isValidLiveClass(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (isAdmin() || (isApprovedTeacher() && incoming().teacherId == request.auth.uid));
+      allow update: if isValidId(classId) &&
+        isVerifiedUser() &&
+        isValidLiveClass(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().teacherId == existing().teacherId &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            isApprovedTeacher() &&
+            existing().teacherId == request.auth.uid &&
+            existing().status != 'completed' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'scheduledFor', 'durationMinutes', 'meetingUrl', 'topic', 'status', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(classId) && isAdmin();
+    }
+
+    // 7. Islamic Library Items
+    match /library_items/{itemId} {
+      allow get: if isValidId(itemId) && (existing().published == true || isAdmin() || isApprovedTeacher());
+      allow list: if existing().published == true || isAdmin();
+      allow create: if isValidId(itemId) &&
+        isVerifiedUser() &&
+        isValidLibraryItem(incoming()) &&
+        incoming().createdBy == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (isAdmin() || isApprovedTeacher());
+      allow update: if isValidId(itemId) &&
+        isVerifiedUser() &&
+        isValidLibraryItem(incoming()) &&
+        incoming().createdBy == existing().createdBy &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            isApprovedTeacher() &&
+            existing().createdBy == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'author', 'category', 'language', 'description', 'contentPreview', 'pages', 'published', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(itemId) && isAdmin();
+    }
+
+    // 8. Lectures
+    match /lectures/{lectureId} {
+      allow get: if isValidId(lectureId) && (existing().published == true || isAdmin() || isApprovedTeacher());
+      allow list: if existing().published == true || isAdmin();
+      allow create: if isValidId(lectureId) &&
+        isVerifiedUser() &&
+        isValidLecture(incoming()) &&
+        incoming().createdBy == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (isAdmin() || isApprovedTeacher());
+      allow update: if isValidId(lectureId) &&
+        isVerifiedUser() &&
+        isValidLecture(incoming()) &&
+        incoming().createdBy == existing().createdBy &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            isApprovedTeacher() &&
+            existing().createdBy == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'speaker', 'category', 'durationLabel', 'summary', 'mediaUrl', 'published', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(lectureId) && isAdmin();
+    }
+
+    // 9. Quran Progress & Bookmarks
+    match /quran_progress/{progressId} {
+      allow get: if isValidId(progressId) && isSignedIn() &&
+        (existing().userId == request.auth.uid || existing().guardianId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() &&
+        (existing().userId == request.auth.uid || existing().guardianId == request.auth.uid || isAdmin());
+      allow create: if isValidId(progressId) &&
+        isVerifiedUser() &&
+        isValidQuranProgress(incoming()) &&
+        incoming().userId == request.auth.uid &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(progressId) &&
+        isVerifiedUser() &&
+        isValidQuranProgress(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            existing().userId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['surahNumber', 'surahName', 'ayahNumber', 'juzNumber', 'pageNumber', 'note', 'isBookmark', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(progressId) && isVerifiedUser() && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // 10. Guardian Links (Parental Consent & Child Management)
+    match /guardian_links/{linkId} {
+      allow get: if isValidId(linkId) && isSignedIn() &&
+        (existing().parentUid == request.auth.uid || existing().childUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() &&
+        (existing().parentUid == request.auth.uid || existing().childUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(linkId) &&
+        isVerifiedUser() &&
+        isValidGuardianLink(incoming()) &&
+        incoming().parentUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(linkId) &&
+        isVerifiedUser() &&
+        isValidGuardianLink(incoming()) &&
+        incoming().parentUid == existing().parentUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            existing().parentUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['childUid', 'childName', 'childAge', 'consentGranted', 'dailyLimitMinutes', 'notes', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(linkId) && isVerifiedUser() && (existing().parentUid == request.auth.uid || isAdmin());
+    }
+
+    // 11. Contact Messages
+    match /contact_messages/{messageId} {
+      allow get: if isValidId(messageId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(messageId) &&
+        isValidContactMessage(incoming()) &&
+        incoming().status == 'new' &&
+        incoming().createdAt == request.time;
+      allow update: if isValidId(messageId) &&
+        isAdmin() &&
+        isValidContactMessage(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+      allow delete: if isValidId(messageId) && isAdmin();
+    }
+  }
+}

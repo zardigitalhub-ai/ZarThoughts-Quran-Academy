@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="96" fill="#065F46" />
+  <rect x="28" y="28" width="456" height="456" rx="76" stroke="#D4AF37" stroke-width="6" stroke-opacity="0.45" />
+  <!-- Rub el Hizb 8-point Islamic Geometric Star -->
+  <rect x="136" y="136" width="240" height="240" rx="12" stroke="#D4AF37" stroke-width="8" stroke-opacity="0.7" />
+  <rect x="136" y="136" width="240" height="240" rx="12" transform="rotate(45 256 256)" stroke="#D4AF37" stroke-width="8" stroke-opacity="0.7" />
+  <!-- Open Holy Quran Silhouette -->
+  <path d="M256 196C230 178 190 174 156 184V318C190 308 230 312 256 330C282 312 322 308 356 318V184C322 174 282 178 256 196Z" fill="#FFFFFF" />
+  <path d="M256 196V330" stroke="#065F46" stroke-width="6" stroke-linecap="round" />
+  <path d="M180 218C204 212 228 216 244 226M180 248C204 242 228 246 244 256M180 278C204 272 228 276 244 286" stroke="#065F46" stroke-width="5" stroke-linecap="round" opacity="0.65" />
+  <path d="M332 218C308 212 284 216 268 226M332 248C308 242 284 246 268 256M332 278C308 272 284 276 268 286" stroke="#065F46" stroke-width="5" stroke-linecap="round" opacity="0.65" />
+  <!-- Rehal Stand Base -->
+  <path d="M206 346L256 326L306 346" stroke="#D4AF37" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" />
+</svg>
